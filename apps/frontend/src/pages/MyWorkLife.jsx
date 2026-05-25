@@ -1,0 +1,325 @@
+import React, { useState, useEffect } from 'react';
+import { 
+    Heart, Rocket, Camera, Upload, 
+    Trophy, Calendar, Star, Package, 
+    FileText, Download, TrendingUp, BadgeCheck
+} from 'lucide-react';
+import { API_URL } from '../config';
+import { PLACEHOLDER_IMAGE } from '../utils';
+
+const MyWorkLife = ({ userId, setActiveMenu }) => {
+    const [profile, setProfile] = useState(null);
+    const [loading, setLoading] = useState(true);
+
+    const apiUrl = API_URL;
+
+    useEffect(() => {
+        fetchProfile();
+    }, [userId]);
+
+    const fetchProfile = async () => {
+        try {
+            const res = await fetch(`${apiUrl}/employee/profile?employee_id=${userId}`);
+            const data = await res.json();
+            setProfile(data);
+        } catch (err) {
+            console.error("Error fetching profile:", err);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handlePhotoUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onloadend = async () => {
+            try {
+                const res = await fetch(`${apiUrl}/admin/employee/${userId}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        // Using a dummy field or existing one to trigger update, 
+                        // but better to have a specific upload for ID photo
+                    })
+                });
+                // I'll actually add a specific endpoint for ID photo upload to be cleaner
+                const uploadRes = await fetch(`${apiUrl}/employee/upload-id-photo`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        employee_id: userId,
+                        image_base64: reader.result
+                    })
+                });
+                if (uploadRes.ok) {
+                    fetchProfile();
+                }
+            } catch (err) {
+                console.error("Upload failed", err);
+            }
+        };
+        reader.readAsDataURL(file);
+    };
+
+
+    const calculateTenure = (joiningDate) => {
+        if (!joiningDate) return "New Joinee";
+        const start = new Date(joiningDate);
+        const now = new Date();
+        const diffTime = Math.abs(now - start);
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+        if (diffDays < 30) return <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>New Joinee <Rocket size={14} /></span>;
+
+        const years = (diffDays / 365.25).toFixed(1);
+        return `${years}y`;
+    };
+
+    if (loading) return <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '2rem' }}>Loading journey...</div>;
+
+    return (
+        <div className="work-life-page">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+                <h1 className="card-title" style={{ fontSize: '1.75rem', margin: 0, display: 'flex', alignItems: 'center', gap: '0.75rem' }}><Heart size={32} color="var(--primary)" fill="var(--primary)" /> My Work Life</h1>
+                <div style={{ display: 'flex', gap: '1rem' }}>
+                    <span style={{ background: '#e0e7ff', color: 'var(--primary)', padding: '0.25rem 0.75rem', borderRadius: '20px', fontSize: '0.8rem', fontWeight: 'bold', border: '1px solid #c7d2fe' }}>
+                        {profile?.position || 'Staff'}
+                    </span>
+                    <span style={{ background: profile?.employment_type === 'Intern' ? '#f5f3ff' : '#eff6ff', color: profile?.employment_type === 'Intern' ? 'var(--violet)' : 'var(--secondary)', padding: '0.25rem 0.75rem', borderRadius: '20px', fontSize: '0.8rem', fontWeight: 'bold', border: `1px solid ${profile?.employment_type === 'Intern' ? '#ddd6fe' : '#bfdbfe'}` }}>
+                        {profile?.employment_type || 'Full-Time'}
+                    </span>
+                </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '2rem', marginBottom: '2rem' }}>
+                {/* ID Card Visualization */}
+                <div className="card shadow-2xl id-card-container">
+                    <div className="id-card-header">
+                        <div className="id-card-logo">NeuzenAI</div>
+                        <div className="id-chip"></div>
+                    </div>
+                    <div className="id-card-body">
+                        <div className="id-photo-frame">
+                            <img 
+                                src={profile?.id_card_photo_key ? `${apiUrl}/admin/photos/${profile.id_card_photo_key}` : (profile?.reference_image_key ? `${apiUrl}/admin/photos/${profile.reference_image_key}` : PLACEHOLDER_IMAGE)} 
+                                alt="Profile" 
+                            />
+                        </div>
+                        <div className="id-details">
+                            <div className="id-name">{profile?.name || 'EMPLOYEE NAME'}</div>
+                            <div className="id-role">{profile?.position || 'Staff Designer'}</div>
+                            <div className="id-meta">
+                                <div><span>ID:</span> {profile?.employee_id}</div>
+                                <div><span>BLD:</span> O+</div>
+                                <div><span>JOIN:</span> {profile?.joining_date?.split('T')[0] || '2026-01-01'}</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div className="id-footer">
+                        <div className="id-barcode"></div>
+                        <div className="id-verify-tag">CERTIFIED BIOMETRIC</div>
+                    </div>
+                </div>
+
+                {/* Upload Section */}
+                <div className="card shadow-sm" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: '1.5rem', textAlign: 'center', background: '#ffffff', border: '1px solid var(--border-color)' }}>
+                    <div style={{ padding: '1rem', background: 'var(--bg-color)', borderRadius: '50%' }}><Camera size={48} color="var(--text-muted)" /></div>
+                    <div>
+                        <h2 className="card-title" style={{ marginBottom: '0.5rem' }}>Update ID Photo</h2>
+                        <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                            Upload a professional photo for your digital ID card. 
+                            Alternatively, use the AI Face Scan in the Attendance section.
+                        </p>
+                    </div>
+                    <label className="btn btn-primary" style={{ cursor: 'pointer' }}>
+                        <Upload size={18} /> Upload Photo
+                        <input type="file" hidden onChange={handlePhotoUpload} accept="image/*" />
+                    </label>
+                </div>
+            </div>
+
+            <div className="grid-3">
+                <div className="card shadow-sm" style={{ textAlign: 'center', background: '#ffffff', border: '1px solid var(--border-color)' }}>
+                    <div style={{ marginBottom: '1rem' }}><Trophy size={32} color="var(--secondary)" /></div>
+                    <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'var(--secondary)' }}>150</div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Reward Points</div>
+                </div>
+                <div className="card shadow-sm" style={{ textAlign: 'center', background: '#ffffff', border: '1px solid var(--border-color)' }}>
+                    <div style={{ marginBottom: '1rem' }}><Calendar size={32} color="var(--primary)" /></div>
+                    <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'var(--primary)' }}>
+                        {calculateTenure(profile?.joining_date)}
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Tenure</div>
+                </div>
+                <div className="card shadow-sm" style={{ textAlign: 'center', background: '#ffffff', border: '1px solid var(--border-color)' }}>
+                    <div style={{ marginBottom: '1rem' }}><Star size={32} color="var(--secondary)" fill="var(--secondary)" /></div>
+                    <div style={{ fontSize: '1.5rem', fontWeight: 'bold', color: 'var(--secondary)' }}>4.8</div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Avg. Rating</div>
+                </div>
+
+                <div 
+                    className="card shadow-sm" 
+                    style={{ textAlign: 'center', cursor: 'pointer', border: '1px solid var(--primary)', background: '#f5f3ff' }}
+                    onClick={() => setActiveMenu('items')}
+                >
+                    <div style={{ marginBottom: '1rem' }}><Package size={32} color="var(--primary)" /></div>
+                    <div style={{ fontSize: '1.25rem', fontWeight: 'bold', color: 'var(--primary)' }}>Request Item</div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Apply for equipment</div>
+                </div>
+            </div>
+
+
+            {profile?.offer_letter_status === 'final' && (
+                <div className="card shadow-sm" style={{ marginTop: '2rem', border: '1px solid #bfdbfe', background: '#eff6ff' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                            <h2 className="card-title" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}><FileText size={20} color="var(--primary)" /> Official Offer Letter</h2>
+                            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>Your official internship appointment letter is available for download.</p>
+                        </div>
+                        <button
+                            className="btn btn-primary"
+                            style={{ backgroundColor: 'var(--secondary)' }}
+                            onClick={() => window.open(`${apiUrl}/employee/offer-letter?employee_id=${userId}`, '_blank')}
+                        >
+                            <Download size={18} /> Download PDF
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            <div className="card" style={{ marginTop: '2rem' }}>
+                <h2 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><TrendingUp size={24} color="var(--primary)" /> Growth Journey</h2>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                    <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
+                            <span>Skill Mastery: Core Competencies</span>
+                            <span>{profile?.employment_type === 'Intern' ? '45%' : '85%'}</span>
+                        </div>
+                        <div style={{ height: '8px', background: 'var(--border-color)', borderRadius: '4px', overflow: 'hidden' }}>
+                            <div style={{ width: profile?.employment_type === 'Intern' ? '45%' : '85%', height: '100%', background: 'var(--primary)' }}></div>
+                        </div>
+                    </div>
+                    <div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
+                            <span>Probation/Project Goals</span>
+                            <span>{profile?.employment_type === 'Intern' ? '20%' : '60%'}</span>
+                        </div>
+                        <div style={{ height: '8px', background: 'var(--border-color)', borderRadius: '4px', overflow: 'hidden' }}>
+                            <div style={{ width: profile?.employment_type === 'Intern' ? '20%' : '60%', height: '100%', background: 'var(--secondary)' }}></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <style>{`
+                .id-card-container {
+                    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+                    border: 1px solid rgba(255,255,255,0.1);
+                    position: relative;
+                    overflow: hidden;
+                    padding: 0 !important;
+                    display: flex;
+                    flex-direction: column;
+                    box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+                    border-radius: 16px;
+                    transition: transform 0.3s ease;
+                }
+                .id-card-container:hover {
+                    transform: translateY(-5px) rotateX(2deg);
+                }
+                .id-card-header {
+                    padding: 20px;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    background: rgba(255,255,255,0.05);
+                }
+                .id-card-logo {
+                    font-weight: 900;
+                    letter-spacing: 1px;
+                    color: var(--primary);
+                }
+                .id-chip {
+                    width: 35px;
+                    height: 25px;
+                    background: linear-gradient(135deg, #ffd700 0%, #b8860b 100%);
+                    border-radius: 4px;
+                }
+                .id-card-body {
+                    padding: 20px;
+                    display: flex;
+                    gap: 20px;
+                }
+                .id-photo-frame {
+                    width: 100px;
+                    height: 125px;
+                    border: 2px solid var(--secondary);
+                    border-radius: 8px;
+                    overflow: hidden;
+                    background: #000;
+                }
+                .id-photo-frame img {
+                    width: 100%;
+                    height: 100%;
+                    object-fit: cover;
+                }
+                .id-details {
+                    flex: 1;
+                    display: flex;
+                    flex-direction: column;
+                    justify-content: center;
+                }
+                .id-name {
+                    font-size: 1.25rem;
+                    font-weight: 800;
+                    color: white;
+                    margin-bottom: 4px;
+                }
+                .id-role {
+                    font-size: 0.85rem;
+                    color: var(--secondary);
+                    font-weight: 600;
+                    margin-bottom: 15px;
+                }
+                .id-meta {
+                    font-size: 0.7rem;
+                    color: rgba(255,255,255,0.5);
+                    display: flex;
+                    flex-direction: column;
+                    gap: 2px;
+                }
+                .id-meta span {
+                    color: rgba(255,255,255,0.8);
+                    font-weight: bold;
+                    width: 40px;
+                    display: inline-block;
+                }
+                .id-footer {
+                    margin-top: auto;
+                    padding: 15px 20px;
+                    background: var(--primary);
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                }
+                .id-barcode {
+                    width: 80px;
+                    height: 20px;
+                    background: repeating-linear-gradient(90deg, #fff, #fff 1px, transparent 1px, transparent 3px);
+                }
+                .id-verify-tag {
+                    font-size: 0.6rem;
+                    font-weight: 900;
+                    color: white;
+                    background: rgba(0,0,0,0.3);
+                    padding: 2px 8px;
+                    border-radius: 4px;
+                }
+            `}</style>
+        </div>
+    );
+};
+
+export default MyWorkLife;

@@ -1,0 +1,17 @@
+fastapi
+uvicorn
+pydantic
+boto3
+python-multipart
+python-dotenv
+pymongo
+google-generativeai
+opencv-python-headless
+mediapipe
+pypdf
+jinja2
+xhtml2pdf
+mangum
+fpdf2
+pdfkit
+chromadb

@@ -1,0 +1,134 @@
+/* =========================================================================
+   WorkDrive module styles
+   - Tailwind is scoped: every utility is emitted as `.wd-root .<utility>`
+     (see tailwind.config.js `important: '.wd-root'`), so nothing leaks onto
+     the existing NeuzenAI HRMS pages.
+   - The rules below re-establish a clean baseline inside `.wd-root` because
+     Tailwind's global preflight reset is disabled and the host app applies a
+     few global `input/select/textarea` rules with `!important`.
+   ========================================================================= */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---- module shell -------------------------------------------------------- */
+.wd-root {
+  height: calc(100vh - 4rem);
+  min-height: 540px;
+  display: flex;
+  border: 1px solid #e4e9f0;
+  border-radius: 14px;
+  overflow: hidden;
+  background: #f6f8fb;
+  box-shadow: 0 1px 3px rgba(31, 56, 100, 0.08);
+  color: #1f2933;
+}
+
+@media (max-width: 768px) {
+  .wd-root {
+    height: auto;
+    min-height: calc(100vh - 8rem);
+  }
+}
+
+/* ---- button reset (Tailwind preflight is disabled) ----------------------- */
+.wd-root button {
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: transparent;
+  background-image: none;
+  border: 0;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  line-height: inherit;
+  cursor: pointer;
+}
+.wd-root button:disabled {
+  cursor: not-allowed;
+}
+
+/* ---- form controls: neutralise the host app's global `!important` rules -- */
+.wd-root input:not([type='checkbox']):not([type='radio']),
+.wd-root select,
+.wd-root textarea {
+  background-color: #ffffff !important;
+  color: #1f2933 !important;
+  border: 1px solid #e4e9f0 !important;
+  box-shadow: none !important;
+  font-family: inherit;
+  font-weight: 400;
+  transition: border-color 0.15s ease;
+}
+.wd-root input:not([type='checkbox']):not([type='radio']):focus,
+.wd-root select:focus,
+.wd-root textarea:focus {
+  outline: none;
+  border-color: #ff4500 !important;
+  box-shadow: none !important;
+}
+.wd-root input::placeholder,
+.wd-root textarea::placeholder {
+  color: #94a3b8;
+  opacity: 1;
+  font-weight: 400;
+}
+.wd-root input[type='checkbox'] {
+  -webkit-appearance: checkbox !important;
+  appearance: auto !important;
+  background-color: initial !important;
+  border: initial !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  box-shadow: none !important;
+  accent-color: #ff4500;
+  cursor: pointer;
+}
+
+/* ---- labels: host app makes labels block + bold; keep WorkDrive's own ---- */
+.wd-root label {
+  letter-spacing: normal;
+}
+
+/* ---- scrollbars (scoped) ------------------------------------------------- */
+.wd-root ::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.wd-root ::-webkit-scrollbar-thumb {
+  background: #cdd7e3;
+  border-radius: 8px;
+}
+.wd-root ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---- animations --------------------------------------------------------- */
+@keyframes wd-fade {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes wd-toast {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.wd-fade {
+  animation: wd-fade 0.14s ease-out;
+}
+.wd-toast {
+  animation: wd-toast 0.2s ease-out;
+}

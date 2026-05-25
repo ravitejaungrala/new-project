@@ -1,0 +1,1446 @@
+import React, { useState, useRef, useEffect } from 'react';
+import { 
+    Clock, MapPin, Calendar, Globe, Megaphone, Building2, Home, 
+    TreePalm, Plane, History, X, HelpCircle, Lightbulb, Sun, 
+    User, CheckCircle2, ChevronRight, AlertTriangle, Play, Pause, Power,
+    Bot, MoreVertical, BarChart3, ScrollText, ArrowLeft, Camera, Eye, 
+    ChevronLeft, Sparkles, ToggleRight, FileText, TrendingUp, Briefcase,
+    LogIn, LogOut
+} from 'lucide-react';
+import {
+    XAxis, YAxis, Tooltip, ResponsiveContainer,
+    PieChart, Pie, Cell, AreaChart, Area, CartesianGrid
+} from 'recharts';
+import { API_URL } from '../config';
+
+const HomeDashboard = ({ user, setUser }) => {
+    const [step, setStep] = useState(1);
+    const [loading, setLoading] = useState(false);
+    const [message, setMessage] = useState(null);
+
+    // Form State
+    const [formData, setFormData] = useState({
+        dob: '',
+        is_experienced: false,
+        prev_company: '',
+        prev_role: '',
+        experience_years: '',
+        bank_account: '',
+        bank_ifsc: '',
+        bank_name: '',
+        cif_number: '',
+        pan_no: '',
+        education_degree: '',
+        pf_number: '',
+    });
+
+
+    const [bankPhoto, setBankPhoto] = useState(null);
+    const [eduCert, setEduCert] = useState(null);
+    const [payslipPhoto, setPayslipPhoto] = useState(null); // New
+    const [referenceFace, setReferenceFace] = useState(null);
+    const [capturedFaces, setCapturedFaces] = useState({ front: null, left: null, right: null });
+
+
+    // Camera State
+    const videoRef = useRef(null);
+    const [streamActive, setStreamActive] = useState(false);
+    const [stream, setStream] = useState(null);
+    const [livenessStatus, setLivenessStatus] = useState('none'); // none, prompt, left, right, verified
+    const faceMeshRef = useRef(null);
+
+    // Dashboard Data
+    const [dashboardData, setDashboardData] = useState(null);
+    const [dashboardLoading, setDashboardLoading] = useState(false);
+    const [activeTab, setActiveTab] = useState('dashboard');
+    const [todayStatus, setTodayStatus] = useState({ last_punch: null, status: 'Not Signed In' });
+    const [punchLoading, setPunchLoading] = useState(false);
+    const [showCamera, setShowCamera] = useState(false);
+    const [punchAction, setPunchAction] = useState(null);
+    const [showSwipeModal, setShowSwipeModal] = useState(false);
+    const [attendanceHistory, setAttendanceHistory] = useState([]);
+    const [showDotsMenu, setShowDotsMenu] = useState(false);
+    const [leaveBalance, setLeaveBalance] = useState(null);
+    const [weeklyAttendance, setWeeklyAttendance] = useState([]);
+    const [payslipSummary, setPayslipSummary] = useState([]);
+    const [attendanceChartMode, setAttendanceChartMode] = useState('daily');
+    const [attendanceChartData, setAttendanceChartData] = useState([]);
+    const [attendanceChartLoading, setAttendanceChartLoading] = useState(false);
+
+    const apiUrl = API_URL;
+
+    useEffect(() => {
+        if (user.status === 'approved') {
+            fetchDashboardData();
+            fetchPunchStatus();
+            fetchLeaveBalance();
+            fetchPayslipSummary();
+            fetchAttendanceChart('daily');
+        }
+        if (user.status === 'incomplete_profile') {
+            loadMediapipe();
+        }
+    }, [user.status]);
+
+    const fetchPunchStatus = async () => {
+        try {
+            const res = await fetch(`${apiUrl}/employee/attendance/status?employee_id=${user.employee_id}`);
+            const data = await res.json();
+            setTodayStatus(data);
+        } catch (err) {
+            console.error("Error fetching punch status:", err);
+        }
+    };
+
+    const loadMediapipe = async () => {
+        if (window.FaceMesh) return;
+        const script = document.createElement('script');
+        script.src = "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js";
+        script.async = true;
+        script.onload = () => {
+            const cameraScript = document.createElement('script');
+            cameraScript.src = "https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js";
+            cameraScript.async = true;
+            cameraScript.onload = initFaceMesh;
+            document.body.appendChild(cameraScript);
+        };
+        document.body.appendChild(script);
+    };
+
+    const initFaceMesh = () => {
+        const faceMesh = new window.FaceMesh({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+        });
+
+        faceMesh.setOptions({
+            maxNumFaces: 1,
+            refineLandmarks: true,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+
+        faceMesh.onResults(onResults);
+        faceMeshRef.current = faceMesh;
+    };
+
+    const isClosedRef = useRef(false);
+
+    const onResults = (results) => {
+        if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) return;
+        const landmarks = results.multiFaceLandmarks[0];
+
+        const leftUpper = landmarks[159];
+        const leftLower = landmarks[145];
+        const eyeDist = Math.sqrt(Math.pow(leftUpper.x - leftLower.x, 2) + Math.pow(leftUpper.y - leftLower.y, 2));
+
+        const nose = landmarks[1];
+        const leftCheek = landmarks[234];
+        const rightCheek = landmarks[454];
+        const checkDist = rightCheek.x - leftCheek.x;
+        const headRatio = checkDist > 0 ? (nose.x - leftCheek.x) / checkDist : 0.5;
+
+        setLivenessStatus(prev => {
+            if (prev === 'prompt') {
+                if (eyeDist < 0.018 && !isClosedRef.current) {
+                    isClosedRef.current = true;
+                } else if (eyeDist > 0.025 && isClosedRef.current) {
+                    isClosedRef.current = false;
+                    captureFrame('front');
+                    return 'left';
+                }
+            } else if (prev === 'left') {
+                if (headRatio > 0.65) {
+                    captureFrame('left');
+                    return 'right';
+                }
+            } else if (prev === 'right') {
+                if (headRatio < 0.35) {
+                    captureFrame('right');
+                    return 'verified';
+                }
+            }
+            return prev;
+        });
+    };
+
+    const captureFrame = (type) => {
+        if (!videoRef.current) return;
+        const canvas = document.createElement('canvas');
+        canvas.width = videoRef.current.videoWidth;
+        canvas.height = videoRef.current.videoHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+        setCapturedFaces(prev => ({ ...prev, [type]: canvas.toDataURL('image/jpeg') }));
+    };
+
+    const fetchDashboardData = async () => {
+        setDashboardLoading(true);
+        try {
+            const res = await fetch(`${apiUrl}/employee/dashboard-insights?employee_id=${user.employee_id}`);
+            const data = await res.json();
+            if (res.ok) {
+                setDashboardData(data);
+            }
+        } catch (err) {
+            console.error("Error fetching dashboard data:", err);
+        } finally {
+            setDashboardLoading(false);
+        }
+    };
+
+    const fetchAttendanceChart = async (mode) => {
+        setAttendanceChartLoading(true);
+        try {
+            const res = await fetch(`${apiUrl}/employee/attendance/chart?employee_id=${user.employee_id}&mode=${mode}`);
+            if (res.ok) {
+                const data = await res.json();
+                setAttendanceChartData(data.data || []);
+            }
+        } catch (err) {
+            console.error('Error fetching attendance chart:', err);
+        } finally {
+            setAttendanceChartLoading(false);
+        }
+    };
+
+    const handleAttendanceChartMode = (mode) => {
+        setAttendanceChartMode(mode);
+        fetchAttendanceChart(mode);
+    };
+
+    const fetchLeaveBalance = async () => {
+        try {
+            const res = await fetch(`${apiUrl}/employee/leave-balance?employee_id=${user.employee_id}`);
+            if (res.ok) {
+                const data = await res.json();
+                setLeaveBalance(data);
+            }
+        } catch (err) {
+            console.error("Error fetching leave balance:", err);
+        }
+    };
+
+    const fetchPayslipSummary = async () => {
+        try {
+            const res = await fetch(`${apiUrl}/employee/payslips?employee_id=${user.employee_id}`);
+            if (res.ok) {
+                const data = await res.json();
+                const slips = (data.payslips || []).slice(0, 6).reverse();
+                setPayslipSummary(slips.map(p => ({
+                    month: p.month?.replace(/\s\d{4}$/, '').slice(0, 3) || '',
+                    net: p.net_salary || 0,
+                    gross: p.gross_salary || 0,
+                })));
+            }
+        } catch (err) {
+            console.error("Error fetching payslip summary:", err);
+        }
+    };
+
+    const cameraRef = useRef(null);
+
+    // Sync stream to video element and initialize MediaPipe Camera
+    useEffect(() => {
+        if (videoRef.current && stream && streamActive && livenessStatus !== 'none' && livenessStatus !== 'verified') {
+            videoRef.current.srcObject = stream;
+
+            // Only initialize MediaPipe Camera if it hasn't been started yet
+            if (window.Camera && faceMeshRef.current && !cameraRef.current) {
+                const camera = new window.Camera(videoRef.current, {
+                    onFrame: async () => {
+                        if (faceMeshRef.current && videoRef.current) {
+                            await faceMeshRef.current.send({ image: videoRef.current });
+                        }
+                    },
+                    width: 640,
+                    height: 480
+                });
+                camera.start();
+                cameraRef.current = camera;
+            }
+        }
+    }, [stream, streamActive, livenessStatus]);
+
+    const handleInputChange = (e) => {
+        const { name, value, type, checked } = e.target;
+        setFormData(prev => ({
+            ...prev,
+            [name]: type === 'checkbox' ? checked : value
+        }));
+    };
+
+    const handleFileUpload = (e, setter) => {
+        const file = e.target.files[0];
+        if (file) {
+            const reader = new FileReader();
+            reader.onloadend = () => setter(reader.result);
+            reader.readAsDataURL(file);
+        }
+    };
+
+    const startCamera = async () => {
+        try {
+            const mediaStream = await navigator.mediaDevices.getUserMedia({ video: true });
+            setStream(mediaStream);
+            setStreamActive(true);
+            setLivenessStatus('prompt');
+            isClosedRef.current = false;
+        } catch (err) {
+            console.error("Camera access error:", err);
+        }
+    };
+
+    const captureFace = () => {
+        // Stop stream
+        if (stream) {
+            stream.getTracks().forEach(track => track.stop());
+            setStream(null);
+        }
+        setStreamActive(false);
+        setLivenessStatus('none');
+        setReferenceFace(capturedFaces.front); // use front face as user's main reference UI
+    };
+
+    const handleDashboardPunch = async (action) => {
+        setPunchAction(action);
+        setPunchLoading(true);
+
+        try {
+            // 1. Submit to Backend directly without camera
+            const response = await fetch(`${apiUrl}/attendance/scan`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    employee_id: user.employee_id,
+                    image_base64: null, // No image needed anymore
+                    location: "Dashboard Mobile/Web",
+                    action_type: action
+                })
+            });
+
+            if (response.ok) {
+                fetchPunchStatus();
+                fetchDashboardData();
+                alert(`Successfully ${action === 'sign_in' ? 'Signed In' : 'Signed Out'}!`);
+            } else {
+                const errData = await response.json();
+                alert(errData.error || "Punch failed. Please try again.");
+            }
+        } catch (err) {
+            console.error("Dashboard punch error:", err);
+            alert("Connection error. Please try again.");
+        } finally {
+            setPunchLoading(false);
+            setPunchAction(null);
+        }
+    };
+
+    const fetchAttendanceHistory = async () => {
+        try {
+            const res = await fetch(`${apiUrl}/employee/attendance/history?employee_id=${user.employee_id}`);
+            const data = await res.json();
+            if (res.ok) {
+                setAttendanceHistory(data.history || []);
+                setShowSwipeModal(true);
+            }
+        } catch (err) {
+            console.error("Error fetching history:", err);
+        }
+    };
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        if (step < 2) {
+            setStep(step + 1);
+            return;
+        }
+
+        setLoading(true);
+
+        try {
+            if (!formData.dob) {
+                setMessage({ type: 'error', text: 'Date of Birth is required' });
+                setStep(1);
+                setLoading(false);
+                return;
+            }
+            if (!referenceFace) {
+                setMessage({ type: 'error', text: 'Identity photo capture is required' });
+                setStep(1);
+                setLoading(false);
+                return;
+            }
+            if (!bankPhoto) {
+                setMessage({ type: 'error', text: 'Bank document is required' });
+                setStep(1);
+                setLoading(false);
+                return;
+            }
+            if (!eduCert) {
+                setMessage({ type: 'error', text: 'Education document is required' });
+                setStep(2);
+                setLoading(false);
+                return;
+            }
+            if (formData.registration_type === 'Full-Time' && formData.is_experienced && !formData.pf_number) {
+                setMessage({ type: 'error', text: 'PF Number is required for experienced Full-Time employees' });
+                setStep(2);
+                setLoading(false);
+                return;
+            }
+            if (formData.registration_type === 'Full-Time' && formData.is_experienced && !payslipPhoto) {
+                setMessage({ type: 'error', text: 'Previous company payslip is required for experienced candidates' });
+                setStep(2);
+                setLoading(false);
+                return;
+            }
+
+            const payload = {
+                employee_id: user.employee_id,
+                ...formData,
+                employment_type: 'Full-Time', // Defaulted, Admin will fix if needed
+                bank_photo_base64: bankPhoto,
+                education_cert_base64: eduCert,
+                last_company_payslip_base64: payslipPhoto,
+                image_base64: capturedFaces.front,
+                image_left_base64: capturedFaces.left,
+                image_right_base64: capturedFaces.right,
+                pf_number: formData.pf_number
+            };
+
+
+            const response = await fetch(`${apiUrl}/auth/complete-profile`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const data = await response.json();
+
+            if (response.ok && !data.error) {
+                setMessage({ type: 'success', text: 'Profile completed! Awaiting admin approval.' });
+                setTimeout(() => {
+                    setUser({ ...user, status: 'pending_approval' });
+                }, 2000);
+            } else {
+                setMessage({ type: 'error', text: data.error || 'Submission failed' });
+            }
+        } catch (err) {
+            setMessage({ type: 'error', text: 'Server error' });
+        }
+        setLoading(false);
+    };
+
+    if (user.status === 'incomplete_profile') {
+        const ProgressIndicator = () => (
+            <div style={{ marginBottom: '2rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                    <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--primary)' }}>
+                        {step === 1 ? 'Personal & Identity' : 'Financial & Official Docs'}
+                    </span>
+                    <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)' }}>Step {step} of 2</span>
+                </div>
+                <div style={{ height: '6px', background: 'var(--border-color)', borderRadius: '10px', overflow: 'hidden' }}>
+                    <div style={{ 
+                        height: '100%', 
+                        width: step === 1 ? '50%' : '100%', 
+                        background: 'linear-gradient(90deg, var(--primary), var(--secondary))',
+                        transition: 'width 0.4s ease'
+                    }} />
+                </div>
+            </div>
+        );
+
+        return (
+            <div style={{ maxWidth: '800px', margin: '2rem auto', padding: '0 1rem' }}>
+                <div className="card shadow-lg animate-fade-in" style={{ padding: '2.5rem', background: '#ffffff', border: '1px solid var(--border-color)' }}>
+                    <div style={{ textAlign: 'center', marginBottom: '2.5rem' }}>
+                        <h2 style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--text-light)', marginBottom: '0.5rem' }}>
+                            Complete Your Profile
+                        </h2>
+                        <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem' }}>Please verify your identity and documents to activate your workspace.</p>
+                    </div>
+
+                    <ProgressIndicator />
+
+                    {message && (
+                        <div style={{ 
+                            padding: '1rem 1.25rem', 
+                            borderRadius: '12px', 
+                            marginBottom: '1.5rem', 
+                            background: message.type === 'error' ? 'rgba(239, 68, 68, 0.08)' : 'rgba(34, 197, 94, 0.08)', 
+                            border: `1px solid ${message.type === 'error' ? 'rgba(239, 68, 68, 0.2)' : 'rgba(34, 197, 94, 0.2)'}`,
+                            color: message.type === 'error' ? '#f87171' : '#4ade80',
+                            fontSize: '0.9rem',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.75rem'
+                        }}>
+                             <span>{message.type === 'error' ? <AlertTriangle size={18} /> : <CheckCircle2 size={18} />}</span>
+                             {message.text}
+                        </div>
+                    )}
+
+                    <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+                        {step === 1 && (
+                            <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+                                {/* Personal Section */}
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '1.5rem' }}>
+                                    <div className="input-field-group">
+                                        <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Date of Birth</label>
+                                        <input 
+                                            type="date" 
+                                            name="dob" 
+                                            required 
+                                            value={formData.dob} 
+                                            onChange={handleInputChange} 
+                                            style={{ width: '100%', padding: '0.85rem', borderRadius: '10px', border: '1px solid var(--border-color)', background: 'rgba(0,0,0,0.02)', color: 'var(--text-light)', outline: 'none' }} 
+                                        />
+                                    </div>
+                                </div>
+
+                                {/* Biometric Section */}
+                                <div style={{ background: '#ffffff', padding: '2rem', borderRadius: '20px', border: '1px solid var(--border-color)', textAlign: 'center' }}>
+                                    <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '0.5rem', color: 'var(--text-light)' }}>Biometric Verification</h3>
+                                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '1.5rem' }}>Verify your identity for attendance using a 3D face scan.</p>
+                                    
+                                    {!referenceFace ? (
+                                        streamActive ? (
+                                            <div style={{ position: 'relative', width: '100%', maxWidth: '400px', margin: '0 auto', borderRadius: '24px', overflow: 'hidden', background: '#000', border: '2px solid var(--primary)', aspectRatio: '4/3', boxShadow: '0 0 30px rgba(255, 69, 0, 0.2)' }}>
+                                                <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                                
+                                                {/* HUD Overlay */}
+                                                <div style={{ position: 'absolute', inset: '0', border: '2px solid rgba(255,255,255,0.1)', margin: '15%', borderRadius: '50%', pointerEvents: 'none', borderStyle: 'dashed' }} />
+
+                                                <div style={{ position: 'absolute', bottom: '2rem', left: '50%', transform: 'translateX(-50%)', padding: '0.6rem 1.2rem', background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(10px)', borderRadius: '30px', color: '#fff', fontSize: '0.8rem', fontWeight: 600, border: '1px solid rgba(255,255,255,0.1)', zIndex: 10, whiteSpace: 'nowrap' }}>
+                                                     {livenessStatus === 'prompt' && <><Eye size={14} /> Blink once to verify liveness</>}
+                                                     {livenessStatus === 'left' && <><ChevronLeft size={14} /> Slowly Turn Head Left</>}
+                                                     {livenessStatus === 'right' && <><ChevronRight size={14} /> Slowly Turn Head Right</>}
+                                                     {livenessStatus === 'verified' && <span style={{ color: '#4ade80', display: 'flex', alignItems: 'center', gap: '0.4rem' }}><CheckCircle2 size={14} /> Liveness Verified</span>}
+                                                </div>
+
+                                                <div style={{ position: 'absolute', top: '1rem', left: '1rem', background: 'rgba(239, 68, 68, 0.85)', color: 'white', padding: '0.3rem 0.75rem', borderRadius: '20px', fontSize: '0.65rem', fontWeight: 800, display: 'flex', alignItems: 'center', gap: '0.5rem', border: '1px solid rgba(255,255,255,0.2)', zIndex: 10 }}>
+                                                    <div style={{ width: '6px', height: '6px', background: 'white', borderRadius: '50%', animation: 'pulse 1.5s infinite' }} />
+                                                    LIVE FEED
+                                                </div>
+                                                
+                                                <button type="button" onClick={captureFace} disabled={livenessStatus !== 'verified'} className="btn btn-primary" style={{ position: 'absolute', bottom: '4.5rem', left: '50%', transform: 'translateX(-50%)', opacity: livenessStatus === 'verified' ? 1 : 0, transition: 'all 0.4s cubic-bezier(0.4, 0, 0.2, 1)', visibility: livenessStatus === 'verified' ? 'visible' : 'hidden' }}>
+                                                    Finalize Identity
+                                                </button>
+                                            </div>
+                                        ) : (
+                                            <div style={{ padding: '4rem 1rem', background: 'rgba(255,255,255,0.01)', borderRadius: '20px', border: '1px dashed var(--border-color)', transition: 'all 0.3s ease' }}>
+                                                 <div style={{ width: '64px', height: '64px', background: 'rgba(255, 69, 0, 0.1)', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1.5rem', color: 'var(--primary)' }}>
+                                                     <Camera size={32} />
+                                                 </div>
+                                                <button type="button" onClick={startCamera} className="btn-submit-premium" style={{ width: 'auto', padding: '0.75rem 2rem' }}>Launch Identity Camera</button>
+                                            </div>
+                                        )
+                                    ) : (
+                                        <div style={{ position: 'relative', width: '220px', margin: '0 auto' }}>
+                                            <div style={{ position: 'absolute', inset: '-4px', borderRadius: '24px', padding: '2px', background: 'linear-gradient(45deg, var(--primary), var(--secondary))', opacity: 0.5 }} />
+                                            <img src={referenceFace} style={{ position: 'relative', width: '220px', borderRadius: '22px', border: '2px solid rgba(255,255,255,0.1)', boxShadow: '0 20px 40px rgba(0,0,0,0.4)' }} />
+                                            <div style={{ position: 'absolute', bottom: '-10px', right: '-10px', background: '#22c55e', color: 'white', width: '32px', height: '32px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1rem', border: '4px solid #1a1a1a', boxShadow: '0 4px 10px rgba(0,0,0,0.3)' }}><CheckCircle2 size={16} /></div>
+                                            <button type="button" onClick={() => setReferenceFace(null)} style={{ background: 'none', border: 'none', color: 'var(--primary)', fontSize: '0.8rem', fontWeight: 600, marginTop: '1.5rem', cursor: 'pointer', textDecoration: 'underline' }}>Retake Biometric Scan</button>
+                                        </div>
+                                    )}
+                                </div>
+
+                                {/* Financial Section */}
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                                    <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-light)', borderLeft: '3px solid var(--primary)', paddingLeft: '0.75rem' }}>Financial Information</h3>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+                                        <div className="input-field-group">
+                                            <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.5rem', textTransform: 'uppercase' }}>Bank Name</label>
+                                            <input type="text" name="bank_name" required placeholder="State Bank of India" value={formData.bank_name} onChange={handleInputChange} style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: '#ffffff', color: 'var(--text-light)' }} />
+                                        </div>
+                                        <div className="input-field-group">
+                                            <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.5rem', textTransform: 'uppercase' }}>Account Number</label>
+                                            <input type="text" name="bank_account" required placeholder="XXXX XXXX XXXX" value={formData.bank_account} onChange={handleInputChange} style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: '#ffffff', color: 'var(--text-light)' }} />
+                                        </div>
+                                        <div className="input-field-group">
+                                            <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.5rem', textTransform: 'uppercase' }}>IFSC Code</label>
+                                            <input type="text" name="bank_ifsc" required placeholder="SBIN000XXXX" value={formData.bank_ifsc} onChange={handleInputChange} style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: '#ffffff', color: 'var(--text-light)' }} />
+                                        </div>
+                                        <div className="input-field-group">
+                                            <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.5rem', textTransform: 'uppercase' }}>CIF Number</label>
+                                            <input type="text" name="cif_number" required placeholder="90XXXXXXXX" value={formData.cif_number} onChange={handleInputChange} style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'rgba(0,0,0,0.02)', color: 'var(--text-light)' }} />
+                                        </div>
+                                    </div>
+                                    <div style={{ background: '#ffffff', padding: '1.25rem', borderRadius: '12px', border: '1px dashed var(--border-color)' }}>
+                                        <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-light)', marginBottom: '1rem', fontWeight: 500 }}>Upload Bank Passbook / Mock Transaction Screenshot</label>
+                                        <input type="file" required onChange={e => handleFileUpload(e, setBankPhoto)} style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }} />
+                                        {bankPhoto && <span style={{ marginLeft: '1rem', color: '#4ade80', fontSize: '0.75rem' }}><CheckCircle2 size={16} /> Attached</span>}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {step === 2 && (
+                            <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+                                {/* Education */}
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                                    <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-light)', borderLeft: '3px solid var(--primary)', paddingLeft: '0.75rem' }}>Official Documents</h3>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+                                        <div className="input-field-group">
+                                            <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.5rem', textTransform: 'uppercase' }}>Degree / Highest Qualification</label>
+                                            <input type="text" name="education_degree" required placeholder="B.Tech (Computer Science)" value={formData.education_degree} onChange={handleInputChange} style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'rgba(0,0,0,0.02)', color: 'var(--text-light)' }} />
+                                        </div>
+                                        <div className="input-field-group">
+                                            <label style={{ display: 'block', fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.5rem', textTransform: 'uppercase' }}>PAN Card Number</label>
+                                            <input type="text" name="pan_no" required placeholder="ABCDE1234F" value={formData.pan_no} onChange={handleInputChange} style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'rgba(0,0,0,0.02)', color: 'var(--text-light)' }} />
+                                        </div>
+                                    </div>
+                                    <div style={{ background: '#ffffff', padding: '1.25rem', borderRadius: '12px', border: '1px dashed var(--border-color)' }}>
+                                        <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-light)', marginBottom: '1rem', fontWeight: 500 }}>Upload Highest Degree Certificate</label>
+                                        <input type="file" required onChange={e => handleFileUpload(e, setEduCert)} style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }} />
+                                        {eduCert && <span style={{ marginLeft: '1rem', color: '#4ade80', fontSize: '0.75rem' }}><CheckCircle2 size={16} /> Attached</span>}
+                                    </div>
+                                </div>
+
+                                {/* Experience Detail */}
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                                        <h3 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--text-light)', borderLeft: '3px solid var(--primary)', paddingLeft: '0.75rem', margin: 0 }}>Career History</h3>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                            <input 
+                                                type="checkbox" 
+                                                name="is_experienced" 
+                                                checked={formData.is_experienced} 
+                                                onChange={handleInputChange} 
+                                                style={{ width: '18px', height: '18px', cursor: 'pointer', accentColor: 'var(--primary)' }} 
+                                            />
+                                            <label style={{ fontSize: '0.85rem', color: 'var(--text-muted)', cursor: 'pointer' }}>I have relevant work experience</label>
+                                        </div>
+                                    </div>
+
+                                    {formData.is_experienced && (
+                                        <div style={{ background: '#ffffff', padding: '1.5rem', borderRadius: '16px', border: '1px solid var(--border-color)', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
+                                            <div className="input-field-group">
+                                                <label style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.5rem', textTransform: 'uppercase' }}>Company</label>
+                                                <input type="text" name="prev_company" required value={formData.prev_company} onChange={handleInputChange} style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'transparent', color: 'var(--text-light)' }} />
+                                            </div>
+                                            <div className="input-field-group">
+                                                <label style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.5rem', textTransform: 'uppercase' }}>Role</label>
+                                                <input type="text" name="prev_role" required value={formData.prev_role} onChange={handleInputChange} style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'transparent', color: 'var(--text-light)' }} />
+                                            </div>
+                                            <div className="input-field-group">
+                                                <label style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.5rem', textTransform: 'uppercase' }}>Years of Experience</label>
+                                                <input type="number" name="experience_years" required value={formData.experience_years} onChange={handleInputChange} style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'transparent', color: 'var(--text-light)' }} />
+                                            </div>
+                                            <div className="input-field-group">
+                                                <label style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.5rem', textTransform: 'uppercase' }}>PF Account Number</label>
+                                                <input type="text" name="pf_number" required value={formData.pf_number} onChange={handleInputChange} style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--border-color)', background: 'transparent', color: 'var(--text-light)' }} />
+                                            </div>
+                                            <div style={{ gridColumn: 'span 2', background: '#ffffff', padding: '1rem', borderRadius: '10px', border: '1px dashed var(--border-color)' }}>
+                                                <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-light)', marginBottom: '0.75rem' }}>Previous Company Payslip (Last 3 Months)</label>
+                                                <input type="file" required onChange={e => handleFileUpload(e, setPayslipPhoto)} style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }} />
+                                                {payslipPhoto && <span style={{ marginLeft: '1rem', color: '#4ade80', fontSize: '0.75rem' }}><CheckCircle2 size={16} /> Attached</span>}
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
+                        <div style={{ display: 'flex', gap: '1.5rem', marginTop: '1.5rem' }}>
+                            {step > 1 && (
+                                <button type="button" onClick={() => setStep(step - 1)} className="btn btn-secondary" style={{ flex: 1, padding: '1rem', borderRadius: '12px' }}>
+                                    Back
+                                </button>
+                            )}
+                            <button
+                                type="submit"
+                                className="btn-submit-premium"
+                                style={{ flex: 2, padding: '1rem', height: 'auto', borderRadius: '12px', opacity: (step === 1 && !referenceFace) ? 0.6 : 1 }}
+                                disabled={loading || (step === 1 && !referenceFace)}
+                            >
+                                {loading ? 'Processing Workspace...' : (step === 2 ? 'Finalize My Membership' : 'Verify & Continue')}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        );
+    }
+
+    if (user.status === 'pending_approval') {
+        return (
+            <div style={{ textAlign: 'center', padding: '4rem 2rem' }}>
+                <div style={{ color: 'var(--primary)', marginBottom: '1.5rem' }}>
+                    <Clock size={64} className="animate-pulse" />
+                </div>
+                <h1 style={{ marginTop: '1.5rem' }}>Awaiting Admin Approval</h1>
+                <p style={{ color: '#000000', marginTop: '0.5rem' }}>Your profile has been submitted. Please check back later once an administrator reviews your details.</p>
+            </div>
+        );
+    }
+
+    // --- Sub-Components ---
+
+    const LeavePage = () => {
+        const [leaveHistory, setLeaveHistory] = useState([]);
+        const [leaveBalance, setLeaveBalance] = useState(null);
+        const [submitting, setSubmitting] = useState(false);
+        const [employeeDirectory, setEmployeeDirectory] = useState([]);
+        const [leaveForm, setLeaveForm] = useState({ 
+            employee_id: user.employee_id, 
+            type: 'Annual Leave', 
+            start: '', 
+            end: '', 
+            reason: '' 
+        });
+
+        const fetchLeaveData = () => {
+            fetch(`${apiUrl}/employee/leaves?employee_id=${user.employee_id}`)
+                .then(res => res.ok ? res.json() : { leaves: [] })
+                .then(data => setLeaveHistory(Array.isArray(data?.leaves) ? data.leaves : []))
+                .catch(() => setLeaveHistory([]));
+
+            fetch(`${apiUrl}/employee/leave-balance?employee_id=${user.employee_id}`)
+                .then(res => res.ok ? res.json() : {})
+                .then(data => setLeaveBalance(data || {}))
+                .catch(() => setLeaveBalance({}));
+        };
+
+        const fetchDirectory = async () => {
+            try {
+                const res = await fetch(`${apiUrl}/employee/directory`);
+                const data = await res.json();
+                setEmployeeDirectory(data.employees || []);
+            } catch (err) {
+                console.error("Error fetching directory:", err);
+            }
+        };
+
+        useEffect(() => {
+            fetchLeaveData();
+            fetchDirectory();
+        }, []);
+
+        const handleApply = async (e) => {
+            e.preventDefault();
+            setSubmitting(true);
+            try {
+                const res = await fetch(`${apiUrl}/leaves/apply`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        employee_id: leaveForm.employee_id,
+                        leave_type: leaveForm.type,
+                        start_date: leaveForm.start,
+                        end_date: leaveForm.end,
+                        reason: leaveForm.reason
+                    })
+                });
+                if (res.ok) {
+                    fetchLeaveData();
+                    setLeaveForm({ employee_id: user.employee_id, type: 'Annual Leave', start: '', end: '', reason: '' });
+                    alert("Leave application submitted!");
+                }
+            } finally {
+                setSubmitting(false);
+            }
+        };
+
+        return (
+            <div className="grid-2" style={{ gap: '2rem' }}>
+                <div className="card shadow-sm" style={{ background: '#ffffff', border: '1px solid var(--border-color)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.5rem' }}>
+                        <Plane size={24} color="var(--primary)" />
+                        <h2 className="card-title" style={{ marginBottom: 0 }}>Apply for Leave</h2>
+                    </div>
+                    <form onSubmit={handleApply} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+                        <div style={{ display: 'flex', gap: '1rem' }}>
+                            <div style={{ flex: 1 }}>
+                                <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.5rem', display: 'block' }}>SELECT EMPLOYEE</label>
+                                <select className="btn btn-secondary" style={{ width: '100%', textAlign: 'left', background: 'var(--bg-color)', border: '1px solid var(--border-color)' }} value={leaveForm.employee_id} onChange={e => setLeaveForm({ ...leaveForm, employee_id: e.target.value })}>
+                                    <option value={user.employee_id}>Current User (You)</option>
+                                    {employeeDirectory.filter(emp => emp.employee_id !== user.employee_id).map(emp => (
+                                        <option key={emp.employee_id} value={emp.employee_id}>{emp.name}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div style={{ flex: 1 }}>
+                                <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.5rem', display: 'block' }}>LEAVE TYPE</label>
+                                <select className="btn btn-secondary" style={{ width: '100%', textAlign: 'left', background: 'var(--bg-color)', border: '1px solid var(--border-color)' }} value={leaveForm.type} onChange={e => setLeaveForm({ ...leaveForm, type: e.target.value })}>
+                                    {leaveBalance?.types?.map(t => <option key={t.name}>{t.name}</option>)}
+                                    <option>Unpaid Leave</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '1rem' }}>
+                            <div style={{ flex: 1 }}>
+                                <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.5rem', display: 'block' }}>START DATE</label>
+                                <input type="date" className="btn btn-secondary" style={{ width: '100%', background: 'var(--bg-color)', border: '1px solid var(--border-color)' }} value={leaveForm.start} onChange={e => setLeaveForm({ ...leaveForm, start: e.target.value })} required />
+                            </div>
+                            <div style={{ flex: 1 }}>
+                                <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.5rem', display: 'block' }}>END DATE</label>
+                                <input type="date" className="btn btn-secondary" style={{ width: '100%', background: 'var(--bg-color)', border: '1px solid var(--border-color)' }} value={leaveForm.end} onChange={e => setLeaveForm({ ...leaveForm, end: e.target.value })} required />
+                            </div>
+                        </div>
+                        <div>
+                            <label style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.5rem', display: 'block' }}>REASON FOR LEAVE</label>
+                            <textarea className="btn btn-secondary" style={{ width: '100%', minHeight: '100px', textAlign: 'left', background: 'var(--bg-color)', border: '1px solid var(--border-color)' }} value={leaveForm.reason} onChange={e => setLeaveForm({ ...leaveForm, reason: e.target.value })} required placeholder="E.g., Medical checkup, Family event..." />
+                        </div>
+                        <button type="submit" className="btn btn-primary" disabled={submitting} style={{ background: 'var(--primary)', fontWeight: 'bold' }}>
+                            {submitting ? 'Processing AI Verification...' : 'Submit Request'}
+                        </button>
+                    </form>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                    <div className="card glass-panel" style={{ position: 'relative' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                            <h2 className="card-title" style={{ marginBottom: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}><BarChart3 size={20} /> Leave Balance</h2>
+                            <button 
+                                onClick={fetchLeaveData}
+                                className="btn-icon" 
+                                style={{ 
+                                    background: 'rgba(255, 69, 0, 0.1)', 
+                                    borderRadius: '50%', 
+                                    padding: '5px',
+                                    cursor: 'pointer',
+                                    border: 'none',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center'
+                                }}
+                                title="Sync Balance"
+                            >
+                                <RefreshCw size={18} />
+                            </button>
+                        </div>
+                        
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                            {leaveBalance?.types?.map((t, i) => (
+                                <div key={i} style={{ padding: '1rem', background: 'rgba(255, 69, 0, 0.05)', borderRadius: '12px', textAlign: 'center', border: '1px solid rgba(255, 69, 0, 0.1)' }}>
+                                    <div style={{ fontSize: '1.5rem', fontWeight: '800', color: 'var(--primary)' }}>{t.remaining}</div>
+                                    <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', fontWeight: 'bold', textTransform: 'uppercase' }}>{t.name}</div>
+                                </div>
+                            ))}
+                        </div>
+
+                        {leaveBalance?.accrual_info?.last_sync && (
+                            <div style={{ fontSize: '0.6rem', color: 'var(--text-muted)', marginTop: '0.75rem', textAlign: 'right', fontStyle: 'italic' }}>
+                                Last synced: {new Date(leaveBalance.accrual_info.last_sync).toLocaleTimeString()}
+                            </div>
+                        )}
+                    </div>
+                    
+                    <div className="card glass-card" style={{ flex: 1 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                            <h2 className="card-title" style={{ marginBottom: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}><History size={20} /> History</h2>
+                            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Status Tracking</div>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', maxHeight: '400px', overflowY: 'auto', paddingRight: '0.5rem' }}>
+                            {leaveHistory.length === 0 ? <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>No recent leave requests found.</p> :
+                                leaveHistory.map((l, i) => (
+                                    <div key={i} style={{ background: 'rgba(255,255,255,0.02)', borderRadius: '10px', padding: '1rem', border: '1px solid var(--border-color)' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.5rem' }}>
+                                            <div>
+                                                <div style={{ fontWeight: '700', fontSize: '0.9rem', color: 'var(--text-light)' }}>
+                                                    <span style={{ 
+                                                        padding: '0.15rem 0.4rem', 
+                                                        borderRadius: '4px', 
+                                                        backgroundColor: 'var(--primary-glow)', 
+                                                        color: 'var(--primary)',
+                                                        fontSize: '0.7rem',
+                                                        marginRight: '0.5rem',
+                                                        border: '1px solid var(--primary)'
+                                                    }}>{l.leave_type_short || 'L'}</span>
+                                                    {l.leave_type}
+                                                </div>
+                                                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                                                    {new Date(l.start_date).toLocaleDateString()} - {new Date(l.end_date).toLocaleDateString()}
+                                                </div>
+                                            </div>
+                                            <span style={{ 
+                                                fontSize: '0.65rem', 
+                                                fontWeight: 800, 
+                                                padding: '4px 10px', 
+                                                borderRadius: '20px', 
+                                                background: (l.status && l.status.toLowerCase().includes('approved')) ? 'rgba(34, 197, 94, 0.15)' : 
+                                                           (l.status && l.status.toLowerCase().includes('rejected')) ? 'rgba(239, 68, 68, 0.15)' : 
+                                                           'rgba(245, 158, 11, 0.15)',
+                                                color: (l.status && l.status.toLowerCase().includes('approved')) ? '#22C55E' : 
+                                                       (l.status && l.status.toLowerCase().includes('rejected')) ? '#EF4444' : 
+                                                       '#F59E0B',
+                                                textTransform: 'uppercase',
+                                                border: `1px solid ${(l.status && l.status.toLowerCase().includes('approved')) ? '#22C55E44' : (l.status && l.status.toLowerCase().includes('rejected')) ? '#EF444444' : '#F59E0B44'}`
+                                            }}>
+                                                {l.status}
+                                            </span>
+                                        </div>
+                                        <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontStyle: 'italic', margin: 0, borderTop: '1px solid var(--border-color)', paddingTop: '0.5rem' }}>
+                                            "{l.reason}"
+                                        </p>
+                                    </div>
+                                ))
+                            }
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
+    const PayslipPage = () => {
+        const [payslips, setPayslips] = useState([]);
+        useEffect(() => {
+            fetch(`${apiUrl}/employee/payslips?employee_id=${user.employee_id}`)
+                .then(res => res.ok ? res.json() : { payslips: [] })
+                .then(data => setPayslips(Array.isArray(data?.payslips) ? data.payslips : []))
+                .catch(() => setPayslips([]));
+        }, []);
+
+        return (
+            <div className="card shadow-sm" style={{ maxWidth: '800px', margin: '0 auto', background: '#ffffff', border: '1px solid var(--border-color)' }}>
+                <h2 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><FileText size={24} /> Your Payslips</h2>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                    {payslips.map((p, i) => (
+                        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem', background: '#ffffff', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                            <div>
+                                <div style={{ fontWeight: 'bold' }}>{p.month}</div>
+                                <div style={{ fontSize: '0.8rem', color: '#000000' }}>Disbursed on {p.date}</div>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '2rem' }}>
+                                <div style={{ fontWeight: 'bold', color: '#ff4500' }}>{p.amount}</div>
+                                <button className="btn btn-secondary" onClick={() => window.open(`${apiUrl}/employee/payslip/download/${p.month}?employee_id=${user.employee_id}`, '_blank')}>Download</button>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        );
+    };
+
+    const KudosPage = () => {
+        const [kudos, setKudos] = useState([]);
+        const [msg, setMsg] = useState('');
+        const [to, setTo] = useState('');
+        const [sending, setSending] = useState(false);
+
+        useEffect(() => {
+            fetch(`${apiUrl}/employee/kudos`)
+                .then(res => res.ok ? res.json() : { kudos: [] })
+                .then(data => setKudos(Array.isArray(data?.kudos) ? data.kudos : []))
+                .catch(() => setKudos([]));
+        }, []);
+
+        const handleGive = async (e) => {
+            e.preventDefault();
+            setSending(true);
+            try {
+                const res = await fetch(`${apiUrl}/employee/kudos`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        sender_id: user.employee_id,
+                        sender_name: user.name,
+                        receiver_name: to,
+                        message: msg
+                    })
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    setKudos([data.record, ...kudos]);
+                    setMsg('');
+                    setTo('');
+                    alert("Kudos shared!");
+                }
+            } finally {
+                setSending(false);
+            }
+        };
+
+        return (
+            <div className="grid-2" style={{ gap: '2rem' }}>
+                <div className="card glass-panel">
+                    <h2 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Sun size={24} color="var(--primary)" /> Spread Appreciation</h2>
+                    <form onSubmit={handleGive} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                        <div><label>To (Colleague Name)</label><input type="text" className="btn btn-secondary" style={{ width: '100%', textAlign: 'left' }} value={to} onChange={e => setTo(e.target.value)} required /></div>
+                        <div><label>What do you appreciate?</label><textarea className="btn btn-secondary" style={{ width: '100%', minHeight: '100px', textAlign: 'left' }} value={msg} onChange={e => setMsg(e.target.value)} required /></div>
+                        <button type="submit" className="btn btn-primary" disabled={sending}>{sending ? 'Sharing...' : 'Share Kudos'}</button>
+                    </form>
+                </div>
+                <div className="card glass-card">
+                    <h2 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Sparkles size={24} color="var(--primary)" /> Recent Appreciation</h2>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                        {kudos.length === 0 ? <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>Be the first to share appreciation!</p> :
+                            kudos.map((k, i) => (
+                                <div key={i} style={{ padding: '1.25rem', background: 'rgba(255, 69, 0, 0.05)', borderLeft: '4px solid var(--primary)', borderRadius: '12px', borderRight: '1px solid var(--border-color)', borderTop: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)' }}>
+                                    <div style={{ fontSize: '0.9rem', color: 'var(--text-light)', marginBottom: '0.5rem' }}>
+                                        <strong>{k.sender_name}</strong> recognized <strong>{k.receiver_name}</strong>
+                                    </div>
+                                    <p style={{ fontStyle: 'italic', margin: '0.5rem 0', fontSize: '0.95rem', color: 'var(--text-light)', lineHeight: '1.5' }}>"{k.message}"</p>
+                                    <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', fontWeight: 500, marginTop: '0.5rem' }}>{k.timestamp ? new Date(k.timestamp).toLocaleDateString() : 'Just now'}</div>
+                                </div>
+                            ))
+                        }
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
+    const HolidayPage = () => {
+        const [holidays, setHolidays] = useState([]);
+        const [hLoading, setHLoading] = useState(true);
+
+        useEffect(() => {
+            fetch(`${apiUrl}/employee/holidays`)
+                .then(res => res.ok ? res.json() : { holidays: [] })
+                .then(data => {
+                    setHolidays(Array.isArray(data?.holidays) ? data.holidays : []);
+                    setHLoading(false);
+                })
+                .catch(err => {
+                    console.error("Error fetching holidays:", err);
+                    setHolidays([]);
+                    setHLoading(false);
+                });
+        }, []);
+
+        return (
+            <div className="card shadow-sm" style={{ maxWidth: '800px', margin: '0 auto', background: '#ffffff', border: '1px solid var(--border-color)' }}>
+                <h2 className="card-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Calendar size={24} /> Company Holiday Calendar</h2>
+                {hLoading ? <p style={{ color: '#000000' }}>Loading holidays...</p> : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                        {holidays.length === 0 ? <p style={{ color: '#000000' }}>No holidays scheduled.</p> :
+                            holidays.map((h, i) => (
+                                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem', background: '#ffffff', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                                    <div>
+                                        <div style={{ fontWeight: 'bold', color: '#ff4500' }}>{h.name}</div>
+                                        <div style={{ fontSize: '0.8rem', color: '#000000' }}>{h.type}</div>
+                                    </div>
+                                    <div style={{ fontWeight: 'bold' }}>
+                                        {new Date(h.date).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                                    </div>
+                                </div>
+                            ))}
+                    </div>
+                )}
+            </div>
+        );
+    };
+
+    return (
+        <div className="home-dashboard">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+                <h1 style={{ fontSize: '1.4rem', fontWeight: 700, margin: 0, letterSpacing: '-0.02em', color: 'var(--text-strong)' }}>
+                    {activeTab === 'dashboard' ? <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>Good Evening, {user.name}! <Sun size={20} color="#f59e0b" /></span> :
+                        activeTab === 'leave' ? 'Leave Management' :
+                            activeTab === 'payslips' ? 'Payroll & Payslips' :
+                                activeTab === 'holidays' ? 'Holiday Calendar' : 'Appreciation Wall'}
+                </h1>
+                {activeTab !== 'dashboard' && <button className="btn btn-secondary" onClick={() => setActiveTab('dashboard')} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.8rem' }}><ArrowLeft size={16} /> Back</button>}
+            </div>
+
+            {activeTab === 'dashboard' ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+
+                    {/* Row 1: Sign In/Out + AI Insight + Quick Stats */}
+                    <div className="grid-row-3">
+
+                        {/* Sign In/Out Box */}
+                        <div style={{
+                            background: '#ffffff', borderRadius: '14px', border: '1px solid var(--border-color)',
+                            padding: '0.85rem', display: 'flex', flexDirection: 'column', gap: '0.4rem',
+                        }}>
+                            <div>
+                                <div style={{ fontSize: '0.65rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', marginBottom: '0.35rem' }}>
+                                    Attendance
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.2rem' }}>
+                                    <div style={{
+                                        width: '7px', height: '7px', borderRadius: '50%',
+                                        background: todayStatus.status === 'Signed In' ? '#22c55e' : todayStatus.status === 'Signed Out' ? '#f59e0b' : '#cbd5e1',
+                                        boxShadow: todayStatus.status === 'Signed In' ? '0 0 8px #22c55e88' : 'none',
+                                    }} />
+                                    <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-strong)' }}>
+                                        {todayStatus.status || 'Not Signed In'}
+                                    </span>
+                                </div>
+                                {todayStatus.total_hours_today && (
+                                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
+                                        Today: <strong style={{ color: 'var(--primary)' }}>{todayStatus.total_hours_today}</strong>
+                                    </div>
+                                )}
+                            </div>
+                            <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                {todayStatus.status === 'Signed In' ? (
+                                    <button
+                                        onClick={() => handleDashboardPunch('sign_out')}
+                                        disabled={punchLoading}
+                                        style={{
+                                            flex: 1, padding: '0.55rem', borderRadius: '10px', border: 'none',
+                                            background: '#fee2e2', color: '#dc2626', fontSize: '0.8rem',
+                                            fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem',
+                                        }}
+                                    >
+                                        <LogOut size={14} /> {punchAction === 'sign_out' ? '...' : 'Sign Out'}
+                                    </button>
+                                ) : (
+                                    <button
+                                        onClick={() => handleDashboardPunch('sign_in')}
+                                        disabled={punchLoading}
+                                        style={{
+                                            flex: 1, padding: '0.55rem', borderRadius: '10px', border: 'none',
+                                            background: 'var(--primary)', color: '#fff', fontSize: '0.8rem',
+                                            fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.35rem',
+                                            boxShadow: '0 4px 12px rgba(255,69,0,0.2)',
+                                        }}
+                                    >
+                                        <LogIn size={14} /> {punchAction === 'sign_in' ? '...' : 'Sign In'}
+                                    </button>
+                                )}
+                            </div>
+                            <button
+                                onClick={fetchAttendanceHistory}
+                                style={{
+                                    background: 'none', border: 'none', fontSize: '0.68rem',
+                                    color: 'var(--primary)', cursor: 'pointer', fontWeight: 500, textAlign: 'left',
+                                    display: 'flex', alignItems: 'center', gap: '0.25rem', padding: 0,
+                                }}
+                            >
+                                <History size={12} /> View swipe history
+                            </button>
+                        </div>
+
+                        {/* AI Insight Card */}
+                        <div style={{
+                            background: '#ffffff', borderRadius: '14px', border: '1px solid var(--border-color)',
+                            padding: '1.25rem', position: 'relative', overflow: 'hidden',
+                        }}>
+                            <div style={{ position: 'absolute', top: '-20px', right: '-20px', width: '80px', height: '80px', background: 'var(--primary)', opacity: 0.04, borderRadius: '50%' }} />
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.75rem' }}>
+                                <Bot size={16} color="var(--primary)" />
+                                <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-strong)' }}>AI Daily Insight</span>
+                            </div>
+                            <div style={{
+                                background: 'var(--primary-soft)', padding: '0.75rem', borderRadius: '10px',
+                                fontSize: '0.82rem', lineHeight: 1.55, color: 'var(--text-body)', marginBottom: '1rem',
+                            }}>
+                                {dashboardLoading ? 'Analyzing...' : (dashboardData?.insight_message || 'Loading...')}
+                            </div>
+
+                            {/* Upcoming Highlights */}
+                            <div style={{ fontSize: '0.68rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
+                                Highlights
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', maxHeight: '140px', overflowY: 'auto' }}>
+                                {dashboardLoading ? (
+                                    <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Loading...</div>
+                                ) : (
+                                    dashboardData?.highlights?.map((h, i) => (
+                                        <div key={i} style={{
+                                            display: 'flex', alignItems: 'center', gap: '0.5rem',
+                                            padding: '0.4rem 0.6rem', borderRadius: '8px', fontSize: '0.78rem',
+                                            background: h.type === 'leave' ? (h.status === 'success' ? '#f0fdf4' : h.status === 'warning' ? '#fffbeb' : '#fef2f2') : '#fafafa',
+                                            border: '1px solid var(--border-color)',
+                                        }}>
+                                            <div style={{
+                                                width: '6px', height: '6px', borderRadius: '50%', flexShrink: 0,
+                                                background: h.type === 'holiday' ? 'var(--primary)' : h.status === 'success' ? '#22c55e' : h.status === 'warning' ? '#f59e0b' : '#ef4444',
+                                            }} />
+                                            <span style={{ fontWeight: 500, color: 'var(--text-strong)', flex: 1 }}>{h.title}</span>
+                                            <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)', flexShrink: 0 }}>{h.time}</span>
+                                        </div>
+                                    )) || <div style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>No highlights</div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Quick Stats */}
+                        <div style={{
+                            background: '#ffffff', borderRadius: '14px', border: '1px solid var(--border-color)',
+                            padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.75rem',
+                        }}>
+                            <div style={{ fontSize: '0.7rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)' }}>
+                                This Month
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                                <div style={{ background: '#f0fdf4', borderRadius: '10px', padding: '0.65rem 0.75rem' }}>
+                                    <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#16a34a' }}>
+                                        {dashboardLoading ? '--' : `${dashboardData?.attendance_percentage || 0}%`}
+                                    </div>
+                                    <div style={{ fontSize: '0.68rem', color: '#4ade80', fontWeight: 500 }}>Attendance</div>
+                                </div>
+                                <div style={{ background: 'var(--primary-soft)', borderRadius: '10px', padding: '0.65rem 0.75rem' }}>
+                                    <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--primary)' }}>
+                                        {dashboardLoading ? '--' : `${dashboardData?.productivity_score || 0}%`}
+                                    </div>
+                                    <div style={{ fontSize: '0.68rem', color: 'var(--secondary)', fontWeight: 500 }}>Productivity</div>
+                                </div>
+                                <div style={{ background: '#faf5ff', borderRadius: '10px', padding: '0.65rem 0.75rem' }}>
+                                    <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#7c3aed' }}>
+                                        {dashboardLoading ? '--' : (dashboardData?.burnout_risk?.split(' ')[0] || 'N/A')}
+                                    </div>
+                                    <div style={{ fontSize: '0.68rem', color: '#a78bfa', fontWeight: 500 }}>Burnout Risk</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Row 2: Attendance Line Graph (full width) */}
+                    <div style={{
+                        background: '#ffffff', borderRadius: '14px', border: '1px solid var(--border-color)',
+                        padding: '1.25rem',
+                    }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                            <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-strong)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                <BarChart3 size={15} color="#7c3aed" /> Attendance Tracker
+                            </div>
+                            <div style={{ display: 'flex', gap: '0.25rem', background: '#f1f5f9', borderRadius: '8px', padding: '2px' }}>
+                                {[{ key: 'daily', label: 'Daily' }, { key: 'monthly', label: 'Monthly' }, { key: 'yearly', label: 'Yearly' }].map(f => (
+                                    <button
+                                        key={f.key}
+                                        onClick={() => handleAttendanceChartMode(f.key)}
+                                        style={{
+                                            padding: '0.3rem 0.7rem', borderRadius: '6px', border: 'none',
+                                            fontSize: '0.72rem', fontWeight: 600, cursor: 'pointer',
+                                            background: attendanceChartMode === f.key ? '#fff' : 'transparent',
+                                            color: attendanceChartMode === f.key ? 'var(--primary)' : 'var(--text-muted)',
+                                            boxShadow: attendanceChartMode === f.key ? 'var(--shadow-xs)' : 'none',
+                                            transition: 'all 0.15s ease',
+                                        }}
+                                    >
+                                        {f.label}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                        {attendanceChartLoading ? (
+                            <div style={{ textAlign: 'center', padding: '3rem 0', color: 'var(--text-muted)', fontSize: '0.82rem' }}>Loading...</div>
+                        ) : attendanceChartData.length > 0 ? (
+                            <ResponsiveContainer width="100%" height={220}>
+                                <AreaChart data={attendanceChartData}>
+                                    <defs>
+                                        <linearGradient id="attGrad" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#7c3aed" stopOpacity={0.15} />
+                                            <stop offset="95%" stopColor="#7c3aed" stopOpacity={0} />
+                                        </linearGradient>
+                                    </defs>
+                                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                                    <XAxis
+                                        dataKey="label"
+                                        tick={{ fontSize: 10, fill: '#94a3b8' }}
+                                        axisLine={false} tickLine={false}
+                                        interval={attendanceChartMode === 'daily' ? 4 : 0}
+                                    />
+                                    <YAxis
+                                        tick={{ fontSize: 10, fill: '#94a3b8' }}
+                                        axisLine={false} tickLine={false} width={35}
+                                        label={{
+                                            value: attendanceChartMode === 'daily' ? 'Hours' : 'Days',
+                                            angle: -90, position: 'insideLeft', offset: 10,
+                                            style: { fontSize: 10, fill: '#94a3b8' }
+                                        }}
+                                    />
+                                    <Tooltip
+                                        contentStyle={{ fontSize: '0.75rem', borderRadius: '8px', border: '1px solid #e5e7eb' }}
+                                        formatter={(v) => [attendanceChartMode === 'daily' ? `${v} hrs` : `${v} days`, '']}
+                                    />
+                                    <Area
+                                        type="monotone"
+                                        dataKey={attendanceChartMode === 'daily' ? 'hours' : 'days'}
+                                        stroke="#7c3aed" fill="url(#attGrad)" strokeWidth={2}
+                                        dot={{ r: attendanceChartMode === 'yearly' ? 4 : 2, fill: '#7c3aed' }}
+                                        activeDot={{ r: 5, stroke: '#7c3aed', strokeWidth: 2, fill: '#fff' }}
+                                    />
+                                </AreaChart>
+                            </ResponsiveContainer>
+                        ) : (
+                            <div style={{ textAlign: 'center', padding: '3rem 0', color: 'var(--text-muted)', fontSize: '0.82rem' }}>No attendance data</div>
+                        )}
+                    </div>
+
+                    {/* Row 3: Leave Balance + Salary Trend */}
+                    <div className="grid-row-2-wide">
+
+                        {/* Leave Balance Donut */}
+                        <div style={{
+                            background: '#ffffff', borderRadius: '14px', border: '1px solid var(--border-color)',
+                            padding: '1.25rem',
+                        }}>
+                            <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-strong)', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                <TreePalm size={15} color="var(--primary)" /> Leave Balance
+                            </div>
+                            {leaveBalance ? (
+                                <>
+                                    <div style={{ width: '100%', height: 160, display: 'flex', justifyContent: 'center' }}>
+                                        <ResponsiveContainer width="100%" height="100%">
+                                            <PieChart>
+                                                <Pie
+                                                    data={leaveBalance.types?.filter(t => t.remaining > 0).length > 0
+                                                        ? leaveBalance.types.map(t => ({ name: t.name.replace(' Leave', '').replace('Compensatory ', 'Comp-'), value: t.remaining }))
+                                                        : [{ name: 'No Leaves', value: 1 }]
+                                                    }
+                                                    cx="50%" cy="50%"
+                                                    innerRadius={40} outerRadius={62}
+                                                    paddingAngle={3} dataKey="value"
+                                                    stroke="none"
+                                                >
+                                                    {['#ff4500', '#10b981', '#3b82f6', '#f59e0b', '#cbd5e1'].map((c, i) => (
+                                                        <Cell key={i} fill={c} />
+                                                    ))}
+                                                </Pie>
+                                                <Tooltip contentStyle={{ fontSize: '0.75rem', borderRadius: '8px' }} />
+                                            </PieChart>
+                                        </ResponsiveContainer>
+                                    </div>
+                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', justifyContent: 'center', marginTop: '0.25rem' }}>
+                                        {leaveBalance.types?.map((t, i) => (
+                                            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+                                                <div style={{ width: 6, height: 6, borderRadius: '50%', background: ['#ff4500', '#10b981', '#3b82f6', '#f59e0b'][i] }} />
+                                                <span>{t.name.replace(' Leave', '').replace('Compensatory ', 'C-')}: <strong>{t.remaining}</strong></span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </>
+                            ) : (
+                                <div style={{ textAlign: 'center', padding: '2rem 0', color: 'var(--text-muted)', fontSize: '0.82rem' }}>Loading...</div>
+                            )}
+                        </div>
+
+                        {/* Salary Trend Chart */}
+                        <div style={{
+                            background: '#ffffff', borderRadius: '14px', border: '1px solid var(--border-color)',
+                            padding: '1.25rem',
+                        }}>
+                            <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-strong)', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                <TrendingUp size={15} color="#10b981" /> Salary Trend (Last 6 Months)
+                            </div>
+                            {payslipSummary.length > 0 ? (
+                                <ResponsiveContainer width="100%" height={200}>
+                                    <AreaChart data={payslipSummary}>
+                                        <defs>
+                                            <linearGradient id="salaryGrad" x1="0" y1="0" x2="0" y2="1">
+                                                <stop offset="5%" stopColor="#ff4500" stopOpacity={0.15} />
+                                                <stop offset="95%" stopColor="#ff4500" stopOpacity={0} />
+                                            </linearGradient>
+                                        </defs>
+                                        <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                                        <XAxis dataKey="month" tick={{ fontSize: 11, fill: '#94a3b8' }} axisLine={false} tickLine={false} />
+                                        <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false} width={45} tickFormatter={v => `₹${(v/1000).toFixed(0)}k`} />
+                                        <Tooltip
+                                            contentStyle={{ fontSize: '0.75rem', borderRadius: '8px', border: '1px solid #e5e7eb' }}
+                                            formatter={(v) => [`₹${v.toLocaleString()}`, '']}
+                                        />
+                                        <Area type="monotone" dataKey="net" stroke="#ff4500" fill="url(#salaryGrad)" strokeWidth={2} name="Net Salary" dot={{ r: 3, fill: '#ff4500' }} />
+                                    </AreaChart>
+                                </ResponsiveContainer>
+                            ) : (
+                                <div style={{ textAlign: 'center', padding: '3rem 0', color: 'var(--text-muted)', fontSize: '0.82rem' }}>No salary data yet</div>
+                            )}
+                        </div>
+
+                    </div>
+
+                    {/* Row 4: Quick Actions + Company Policy */}
+                    <div className="grid-row-2">
+                        {/* Quick Actions */}
+                        <div style={{
+                            background: '#ffffff', borderRadius: '14px', border: '1px solid var(--border-color)',
+                            padding: '1.25rem',
+                        }}>
+                            <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-strong)', marginBottom: '0.75rem' }}>
+                                Quick Actions
+                            </div>
+                            <div className="grid-row-2-actions">
+                                {[
+                                    { icon: <TreePalm size={15} />, label: 'Apply Leave', tab: 'leave', color: '#16a34a', bg: '#f0fdf4' },
+                                    { icon: <FileText size={15} />, label: 'View Payslip', tab: 'payslips', color: '#2563eb', bg: '#eff6ff' },
+                                    { icon: <Calendar size={15} />, label: 'Holidays', tab: 'holidays', color: '#7c3aed', bg: '#faf5ff' },
+                                    { icon: <Sun size={15} />, label: 'Give Kudos', tab: 'kudos', color: '#f59e0b', bg: '#fffbeb' },
+                                ].map((item, i) => (
+                                    <button
+                                        key={i}
+                                        onClick={() => setActiveTab(item.tab)}
+                                        style={{
+                                            display: 'flex', alignItems: 'center', gap: '0.5rem',
+                                            padding: '0.65rem 0.75rem', borderRadius: '10px',
+                                            background: item.bg, border: 'none', cursor: 'pointer',
+                                            fontSize: '0.78rem', fontWeight: 500, color: item.color,
+                                            transition: 'all 0.15s ease',
+                                        }}
+                                    >
+                                        {item.icon} {item.label}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        {/* Company Policy */}
+                        <div style={{
+                            background: '#ffffff', borderRadius: '14px', border: '1px solid var(--border-color)',
+                            borderLeft: '4px solid var(--primary)', padding: '1.25rem',
+                        }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.75rem' }}>
+                                <ScrollText size={15} color="var(--primary)" />
+                                <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-strong)' }}>Company Policy</span>
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', fontSize: '0.82rem', color: 'var(--text-body)' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                    <div style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--primary)', flexShrink: 0 }} />
+                                    <span><strong>Working Hours:</strong> 11 AM – 8 PM</span>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                    <div style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--primary)', flexShrink: 0 }} />
+                                    <span><strong>Monthly Leaves:</strong> 1.5 days/month (FTE)</span>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                    <div style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--primary)', flexShrink: 0 }} />
+                                    <span><strong>Week Off:</strong> Saturday & Sunday</span>
+                                </div>
+                            </div>
+                            <div style={{ marginTop: '0.75rem', background: '#fafafa', padding: '0.5rem 0.6rem', borderRadius: '8px', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                                Adherence required to avoid payroll discrepancies.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            ) : activeTab === 'leave' ? (
+                <LeavePage />
+            ) : activeTab === 'payslips' ? (
+                <PayslipPage />
+            ) : activeTab === 'holidays' ? (
+                <HolidayPage />
+            ) : (
+                <KudosPage />
+            )}
+
+            {showSwipeModal && (
+                <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem' }} onClick={() => setShowSwipeModal(false)}>
+                    <div className="card shadow-lg animate-fade-in" style={{ maxWidth: '600px', width: '100%', background: '#fff', maxHeight: '80vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '1rem' }}>
+                            <h2 style={{ fontSize: '1.25rem', fontWeight: 800, margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Clock size={20} /> Attendance Swipes (Last 30 Days)</h2>
+                            <button onClick={() => setShowSwipeModal(false)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer' }}>×</button>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                            {attendanceHistory.length === 0 ? <p style={{ textAlign: 'center', color: 'var(--text-muted)' }}>No swipe records found.</p> :
+                                attendanceHistory.map((s, i) => (
+                                    <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '0.85rem', background: 'var(--bg-color)', borderRadius: '12px', border: '1px solid var(--border-color)' }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                                            <div style={{ width: '10px', height: '10px', background: s.action === 'sign_in' ? '#22C55E' : '#EF4444', borderRadius: '50%' }}></div>
+                                            <div>
+                                                <div style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-light)' }}>{s.action === 'sign_in' ? 'Sign In' : 'Sign Out'}</div>
+                                                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{s.location}</div>
+                                            </div>
+                                        </div>
+                                        <div style={{ textAlign: 'right' }}>
+                                            <div style={{ fontWeight: 600, fontSize: '0.85rem' }}>{new Date(s.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                                            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{new Date(s.timestamp).toLocaleDateString()}</div>
+                                        </div>
+                                    </div>
+                                ))
+                            }
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+export default HomeDashboard;

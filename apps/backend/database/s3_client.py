@@ -1,0 +1,94 @@
+import boto3
+import json
+import os
+from botocore.exceptions import ClientError
+from dotenv import load_dotenv
+
+load_dotenv()
+
+class S3Database:
+    def __init__(self):
+        # In a real environment, load from environment variables
+        self.bucket_name = os.getenv("S3_BUCKET_NAME")
+        self.region = os.getenv("AWS_REGION")
+        
+        # Detect if we're on AWS Lambda or have explicit credentials
+        is_lambda = os.getenv("AWS_LAMBDA_FUNCTION_NAME") is not None
+        has_keys = os.getenv("AWS_ACCESS_KEY_ID") is not None
+        
+        # Only use mock mode if NOT on Lambda AND no keys are provided
+        self.mock_mode = not (is_lambda or has_keys)
+        self.local_storage = {}
+        
+        if not self.mock_mode:
+            self.s3_client = boto3.client('s3', region_name=self.region)
+
+    def save_data(self, key: str, data: dict):
+        if self.mock_mode:
+            self.local_storage[key] = data
+            return True
+            
+        try:
+            self.s3_client.put_object(
+                Bucket=self.bucket_name,
+                Key=key,
+                Body=json.dumps(data)
+            )
+            return True
+        except ClientError as e:
+            print(f"Error saving to S3: {e}")
+            return False
+
+    def save_image(self, key: str, image_bytes: bytes, content_type: str = 'image/jpeg'):
+        if self.mock_mode:
+            print(f"Mock Mode: Saving image to local storage at {key}")
+            self.local_storage[key] = image_bytes
+            return True
+            
+        try:
+            self.s3_client.put_object(
+                Bucket=self.bucket_name,
+                Key=key,
+                Body=image_bytes,
+                ContentType=content_type
+            )
+            print(f"S3 Success: Uploaded to Bucket '{self.bucket_name}' at Key '{key}'")
+            return True
+        except ClientError as e:
+            print(f"Error saving image to S3 Bucket '{self.bucket_name}': {e}")
+            return False
+
+    def save_file(self, key: str, file_bytes: bytes, content_type: str):
+        if self.mock_mode:
+            print(f"Mock Mode: Saving file to local storage at {key}")
+            self.local_storage[key] = file_bytes
+            return True
+            
+        try:
+            self.s3_client.put_object(
+                Bucket=self.bucket_name,
+                Key=key,
+                Body=file_bytes,
+                ContentType=content_type
+            )
+            return True
+        except ClientError as e:
+            print(f"Error saving file to S3: {e}")
+            return False
+
+    def get_image(self, key: str):
+        if self.mock_mode:
+            print(f"Mock Mode: Retrieving image from local storage at {key}")
+            return self.local_storage.get(key, None)
+            
+        try:
+            response = self.s3_client.get_object(
+                Bucket=self.bucket_name,
+                Key=key
+            )
+            return response['Body'].read()
+        except ClientError as e:
+            print(f"Error reading from S3 Bucket '{self.bucket_name}' at Key '{key}': {e}")
+            return None
+
+s3_db = S3Database()
